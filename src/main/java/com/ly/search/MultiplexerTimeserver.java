@@ -70,8 +70,19 @@ public class MultiplexerTimeServer implements Runnable {
                 e.printStackTrace();
             }
         }
+
+        // 多路复用器关闭后，所有注册在上面的Channel，Pipe等资源都会被自动去注册并关闭，所以不需要重复是否资源
+        if (selector != null) {
+            try {
+                selector.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
     }
 
+    // 写半包未处理
+    // 由于SocketChannel是异步非阻塞的，并不能保证一次能够把需要的字节数据发送完毕，所以会出现“写半包”的情况。
     private void handleInput(SelectionKey key) throws IOException {
         if (key.isValid()) {
             // 处理新接入的请求信息
