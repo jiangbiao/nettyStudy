@@ -1,56 +1,57 @@
-package com.ly.search;
+package com.ly.search.nio;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.Set;
 
 /**
  * Created by jb28755 on 2017/9/10.
  */
-public class TimeClientHandler implements Runnable {
-
-    private String host;
-
-    private int port;
+public class MultiplexerTimeServer implements Runnable {
 
     private Selector selector;
 
-    private SocketChannel socketChannel;
+    private ServerSocketChannel servChannel;
 
     private volatile boolean stop;
 
-    public TimeClientHandler(String host, int port) {
-        this.host = host == null ? "127.0.0.1" : host;
-        this.port = port;
+    /**
+     * 初始化多路复用器、绑定监听端口
+     *
+     * @param port
+     */
+    public MultiplexerTimeServer(int port) {
         try {
             selector = Selector.open();
-            socketChannel = SocketChannel.open();
-            socketChannel.configureBlocking(false);
+            servChannel = ServerSocketChannel.open();
+            servChannel.configureBlocking(false);
+            servChannel.socket().bind(new InetSocketAddress(port), 1024);
+            servChannel.register(selector, SelectionKey.OP_ACCEPT);
+            System.out.println("The time server is start in port:" + port);
         } catch (IOException e) {
             e.printStackTrace();
             System.exit(1);
         }
     }
 
-    public void run() {
-        try {
-            doConnect();
-        } catch (Exception e) {
-            e.printStackTrace();
-            System.exit(1);
-        }
+    public void stop() {
+        this.stop = true;
+    }
 
+    public void run() {
         while (!stop) {
             try {
                 selector.select(1000);
                 Set<SelectionKey> selectionKeys = selector.selectedKeys();
                 Iterator<SelectionKey> it = selectionKeys.iterator();
-                SelectionKey key;
+                SelectionKey key = null;
                 while (it.hasNext()) {
                     key = it.next();
                     it.remove();
@@ -67,7 +68,6 @@ public class TimeClientHandler implements Runnable {
                 }
             } catch (IOException e) {
                 e.printStackTrace();
-                System.exit(1);
             }
         }
 
@@ -81,20 +81,21 @@ public class TimeClientHandler implements Runnable {
         }
     }
 
+    // 写半包未处理
+    // 由于SocketChannel是异步非阻塞的，并不能保证一次能够把需要的字节数据发送完毕，所以会出现“写半包”的情况。
     private void handleInput(SelectionKey key) throws IOException {
         if (key.isValid()) {
-            // 判断连接是否成功
-            SocketChannel sc = (SocketChannel) key.channel();
-            if (key.isConnectable()) {
-                if (sc.finishConnect()) {
-                    sc.register(selector, SelectionKey.OP_READ);
-                    doWrite(sc);
-                } else {
-                    System.exit(1); // 连接失败，进程退出
-                }
+            // 处理新接入的请求信息
+            if (key.isAcceptable()) {
+                ServerSocketChannel ssc = (ServerSocketChannel) key.channel();
+                SocketChannel sc = ssc.accept();
+                sc.configureBlocking(false);
+                sc.register(selector, SelectionKey.OP_READ);
             }
 
             if (key.isReadable()) {
+                // Read the data
+                SocketChannel sc = (SocketChannel) key.channel();
                 ByteBuffer readBuffer = ByteBuffer.allocate(1024);
                 int readBytes = sc.read(readBuffer);
                 if (readBytes > 0) {
@@ -102,39 +103,27 @@ public class TimeClientHandler implements Runnable {
                     byte[] bytes = new byte[readBuffer.remaining()];
                     readBuffer.get(bytes);
                     String body = new String(bytes, "UTF-8");
-                    System.out.println("Now is :" + body);
-                    this.stop = true;
+                    System.out.println("The time server receive order:" + body);
+                    String currentTime = "QUERY TIME ORDER".equalsIgnoreCase(body) ? new Date(System.currentTimeMillis()).toString() : "BAD ORDER";
+                    doWrite(sc, currentTime);
                 } else if (readBytes < 0) {
                     // 对端链路关闭
                     key.cancel();
                     sc.close();
                 } else {
-                    ; //读到0字节，忽略
+                    ; // 读到0字节，忽略
                 }
             }
         }
     }
 
-    private void doConnect() throws IOException {
-        // 如果直接连接成功，则注册到多了复用器上，发送请求信息，读应答
-        if (socketChannel.connect(new InetSocketAddress(host, port))) {
-            socketChannel.register(selector, SelectionKey.OP_READ);
-            doWrite(socketChannel);
-        } else {
-            socketChannel.register(selector, SelectionKey.OP_CONNECT);
-        }
-
-    }
-
-
-    private void doWrite(SocketChannel sc) throws IOException {
-        byte[] req = "QUERY TIME ORDER".getBytes();
-        ByteBuffer writeBuffer = ByteBuffer.allocate(req.length);
-        writeBuffer.put(req);
-        writeBuffer.flip();
-        sc.write(writeBuffer);
-        if (!writeBuffer.hasRemaining()) {
-            System.out.println("Send order 2 server succeed.");
+    private void doWrite(SocketChannel channel, String response) throws IOException {
+        if (response != null && response.trim().length() > 0) {
+            byte[] bytes = response.getBytes();
+            ByteBuffer writerBuffer = ByteBuffer.allocate(bytes.length);
+            writerBuffer.put(bytes);
+            writerBuffer.flip();
+            channel.write(writerBuffer);
         }
     }
 }

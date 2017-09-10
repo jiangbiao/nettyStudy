@@ -1,9 +1,9 @@
-package com.ly.search;
+package com.ly.search.nio;
 
 /**
  * Created by jb28755 on 2017/9/10.
  */
-public class TimeServer {
+public class TimeClient {
 
     public static void main(String[] args) {
         int port = 8080;
@@ -15,8 +15,7 @@ public class TimeServer {
             }
         }
 
-        MultiplexerTimeServer timeserver = new MultiplexerTimeServer(port);
-        new Thread(timeserver, "NIO-MultiplexerTimeServer-001").start();
+        new Thread(new TimeClientHandler("127.0.0.1" , 8080), "TimeClient-001").start();
 
     }
 }
